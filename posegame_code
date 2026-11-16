@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>포즈 맞추기 게임</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Pretendard", "Malgun Gothic", system-ui, sans-serif; background: #14181f; color: #e8ecf1; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; padding: 16px 20px; }
+  @media (max-width: 960px) { main { grid-template-columns: 1fr; } }
+  .stage { position: relative; background: #000; border-radius: 12px; overflow: hidden; }
+  canvas#view { display: block; width: 100%; height: auto; }
+  #hud { position: absolute; left: 0; right: 0; top: 0; display: flex; justify-content: space-between; padding: 10px 14px; font-size: 18px; font-weight: 700; background: linear-gradient(#000a, #0000); }
+  #target { position: absolute; left: 0; right: 0; top: 44px; text-align: center; font-size: 44px; font-weight: 800; text-shadow: 0 3px 14px #000; }
+  #big { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 84px; font-weight: 900; text-shadow: 0 4px 24px #000; pointer-events: none; }
+  #big.ok { color: #3ddc84; } #big.no { color: #ff6b5e; }
+  #bars { position: absolute; left: 14px; right: 14px; bottom: 12px; }
+  .bar { height: 14px; border-radius: 7px; background: #ffffff33; overflow: hidden; margin-top: 6px; }
+  .bar > div { height: 100%; width: 0; }
+  #timeFill { background: #f2b84b; } #probFill { background: #3ddc84; }
+  .barlabel { font-size: 12px; text-shadow: 0 1px 4px #000; margin-top: 6px; }
+  .panel { background: #1c222b; border: 1px solid #2a313c; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+  .panel h2 { margin: 0 0 10px; font-size: 14px; color: #9aa6b5; font-weight: 600; }
+  label { display: block; font-size: 13px; margin: 8px 0 4px; color: #c5ced9; }
+  input[type=text], input[type=number], select { width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #3a4350; background: #11151b; color: #e8ecf1; font-size: 14px; }
+  input[type=file] { width: 100%; font-size: 12px; color: #c5ced9; }
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  button { width: 100%; padding: 11px; margin-top: 10px; border: 0; border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; background: #2a313c; color: #e8ecf1; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  #btnStart { background: #3ddc84; color: #0b2a17; font-size: 17px; }
+  #btnLoad { background: #5aa9ff; color: #06213f; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td { padding: 4px 0; } td:first-child { width: 45%; }
+  .hint { font-size: 12px; color: #8793a3; margin-top: 8px; line-height: 1.5; }
+  #msg { font-size: 13px; margin-top: 8px; color: #f2b84b; min-height: 18px; }
+  details summary { cursor: pointer; font-size: 13px; color: #9aa6b5; margin-top: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <div>
+    <div class="stage">
+      <canvas id="view" width="640" height="480"></canvas>
+      <div id="hud"><span id="hudRound"></span><span id="hudScore"></span></div>
+      <div id="target"></div>
+      <div id="big"></div>
+      <div id="bars">
+        <div class="barlabel" id="probLabel"></div>
+        <div class="bar"><div id="probFill"></div></div>
+        <div class="bar"><div id="timeFill"></div></div>
+      </div>
+    </div>
+    <video id="cam" playsinline muted style="display:none"></video>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>1. 모델 불러오기</h2>
+      <label>Teachable Machine 모델 주소</label>
+      <input type="text" id="modelUrl" placeholder="https://teachablemachine.withgoogle.com/models/xxxx/">
+      <button id="btnLoad">주소로 불러오기</button>
+      <details>
+        <summary>내려받은 모델 파일로 불러오기</summary>
+        <label>model.json</label><input type="file" id="fModel" accept=".json">
+        <label>weights.bin</label><input type="file" id="fWeights" accept=".bin">
+        <label>metadata.json</label><input type="file" id="fMeta" accept=".json">
+        <button id="btnLoadFiles">파일로 불러오기</button>
+      </details>
+      <div id="msg">카메라 여는 중…</div>
+    </div>
+
+    <div class="panel">
+      <h2>2. 클래스와 가이드 연결</h2>
+      <table id="mapTable"><tr><td class="hint">모델을 불러오면 표시됩니다</td></tr></table>
+      <div class="hint">모델의 각 클래스가 어떤 흰 가이드에 해당하는지 고릅니다. "출제 안 함"은 문제로 나오지 않습니다.</div>
+    </div>
+
+    <div class="panel">
+      <h2>3. 게임</h2>
+      <div class="row3">
+        <div><label>라운드</label><input type="number" id="rounds" value="5" min="1"></div>
+        <div><label>제한(초)</label><input type="number" id="limit" value="5" min="1"></div>
+        <div><label>기준 확률</label><input type="number" id="thr" value="0.85" min="0.5" max="1" step="0.05"></div>
+      </div>
+      <button id="btnStart" disabled>게임 시작</button>
+      <button id="btnSerial">아두이노 연결 (선택)</button>
+      <button id="btnLog" disabled>로그 CSV 저장</button>
+      <div class="hint">판정: 최근 5프레임 중 3프레임 이상에서 목표 포즈 확률이 기준 이상이면 성공. 시간 안에 못 하면 실패(점수 없음). 아두이노에는 성공 시 S, 실패 시 F 한 글자를 9600bps로 보냅니다.</div>
+    </div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@0.8/dist/teachablemachine-pose.min.js"></script>
+<script>
+const W = 640, H = 480, WINDOW = 5, NEED = 3;
+const GUIDE_NAMES = { manse: '만세', t: 'T자', left: '왼팔', right: '오른팔', waist: '허리', none: '출제 안 함' };
+const ALIASES = {
+  manse: ['manse', '만세'], t: ['t', 't자', 'tpose', 't-pose'], left: ['left', '왼팔', '왼쪽'],
+  right: ['right', '오른팔', '오른쪽'], waist: ['waist', '허리']
+};
+
+const $ = id => document.getElementById(id);
+const video = $('cam'), view = $('view'), vctx = view.getContext('2d');
+const work = document.createElement('canvas'); work.width = W; work.height = H;
+const wctx = work.getContext('2d');
+
+let model = null, labels = [], mapping = {};          // mapping: className -> guide key
+let phase = 'idle';                                    // idle | show | play | result | end
+let cfg = null, round = 0, score = 0, target = null, phaseEnd = 0, playStart = 0;
+let mlWin = [], baseWin = [], baseDoneAt = null, maxProb = 0;
+let log = [], writer = null, busy = false;
+
+// ---------- 흰 가이드 (촬영 페이지와 동일) ----------
+function guidePoints(pose) {
+  const cx = W / 2, sy = 0.28 * H, hy = 0.55 * H, fy = 0.92 * H, sw = 0.09 * H;
+  const arm = (s, kind) => {
+    const sh = [cx + s * sw, sy];
+    if (kind === 'up')    return [sh, [cx + s * (sw + 0.04*H), sy - 0.13*H], [cx + s * (sw + 0.06*H), sy - 0.26*H]];
+    if (kind === 'side')  return [sh, [cx + s * (sw + 0.13*H), sy],          [cx + s * (sw + 0.26*H), sy]];
+    if (kind === 'waist') return [sh, [cx + s * (sw + 0.11*H), sy + 0.12*H], [cx + s * (sw * 0.9), hy - 0.03*H]];
+    return                       [sh, [cx + s * (sw + 0.03*H), sy + 0.13*H], [cx + s * (sw + 0.04*H), sy + 0.26*H]];
+  };
+  const kinds = { manse: ['up','up'], t: ['side','side'], left: ['up','down'], right: ['down','up'], waist: ['waist','waist'] }[pose];
+  if (!kinds) return null;
+  return {
+    head: [cx, 0.17 * H, 0.06 * H],
+    lines: [ [[cx - sw, sy], [cx + sw, sy]], [[cx, sy], [cx, hy]],
+             [[cx - 0.03*H, hy], [cx - 0.02*H, fy]], [[cx + 0.03*H, hy], [cx + 0.02*H, fy]],
+             arm(-1, kinds[0]), arm(1, kinds[1]) ]
+  };
+}
+function drawGuide(pose, color) {
+  const g = guidePoints(pose);
+  if (!g) return;
+  vctx.save();
+  vctx.strokeStyle = color || 'rgba(255,255,255,0.7)';
+  vctx.lineCap = 'round'; vctx.lineJoin = 'round'; vctx.lineWidth = 0.035 * H;
+  for (const pts of g.lines) {
+    vctx.beginPath(); vctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) vctx.lineTo(pts[i][0], pts[i][1]);
+    vctx.stroke();
+  }
+  vctx.beginPath(); vctx.arc(g.head[0], g.head[1], g.head[2], 0, Math.PI * 2); vctx.stroke();
+  vctx.restore();
+}
+
+// BASELINE-START
+// 비ML 기준 규칙(임시): 거울 화면 기준 관절 좌표에 고정 임계값을 적용한다.
+function armState(s, e, w, hipY, torso, cx) {
+  if (w.y < s.y - 0.3 * torso) return 'up';
+  if (Math.abs(w.y - s.y) < 0.3 * torso && Math.abs(w.x - s.x) > 0.7 * torso) return 'side';
+  if (Math.abs(w.y - hipY) < 0.35 * torso && Math.abs(e.x - cx) > Math.abs(w.x - cx)) return 'waist';
+  return 'down';
+}
+function baselinePredict(kp) {            // kp: PoseNet 17개 관절 [{position:{x,y}}]
+  const P = i => kp[i].position;
+  const A = { s: P(5), e: P(7), w: P(9) }, B = { s: P(6), e: P(8), w: P(10) };
+  const L = A.s.x < B.s.x ? A : B, R = A.s.x < B.s.x ? B : A;   // 화면 왼쪽 팔 / 오른쪽 팔
+  const sy = (A.s.y + B.s.y) / 2, hipY = (P(11).y + P(12).y) / 2, cx = (A.s.x + B.s.x) / 2;
+  const torso = Math.max(Math.abs(hipY - sy), 1);
+  const a = armState(L.s, L.e, L.w, hipY, torso, cx), b = armState(R.s, R.e, R.w, hipY, torso, cx);
+  if (a === 'up' && b === 'up') return 'manse';
+  if (a === 'side' && b === 'side') return 't';
+  if (a === 'up') return 'left';
+  if (b === 'up') return 'right';
+  if (a === 'waist' && b === 'waist') return 'waist';
+  return 'other';
+}
+// BASELINE-END
+
+// ---------- 모델 ----------
+function norm(s) { return String(s).toLowerCase().replace(/\s+/g, ''); }
+function guessGuide(name) {
+  const n = norm(name);
+  for (const k of Object.keys(ALIASES)) for (const a of ALIASES[k]) if (n === a || (a.length > 1 && n.includes(a))) return k;
+  return 'none';
+}
+function afterLoad() {
+  labels = model.getClassLabels();
+  mapping = {};
+  let html = '';
+  labels.forEach((name, i) => {
+    mapping[name] = guessGuide(name);
+    html += '<tr><td>' + name.replace(/</g, '&lt;') + '</td><td><select data-i="' + i + '">' +
+      Object.keys(GUIDE_NAMES).map(k => '<option value="' + k + '"' + (k === mapping[name] ? ' selected' : '') + '>' + GUIDE_NAMES[k] + '</option>').join('') +
+      '</select></td></tr>';
+  });
+  $('mapTable').innerHTML = html;
+  $('mapTable').querySelectorAll('select').forEach(sel => sel.onchange = () => { mapping[labels[+sel.dataset.i]] = sel.value; });
+  $('msg').textContent = '모델 불러옴: 클래스 ' + labels.length + '개';
+  $('btnStart').disabled = false;
+}
+async function loadFromUrl() {
+  let url = $('modelUrl').value.trim();
+  if (!url) { $('msg').textContent = '모델 주소를 넣어 주세요'; return; }
+  if (!url.endsWith('/')) url += '/';
+  $('msg').textContent = '모델 불러오는 중…';
+  try {
+    model = await tmPose.load(url + 'model.json', url + 'metadata.json');
+    try { localStorage.setItem('poseGameModelUrl', url); } catch (e) {}
+    afterLoad();
+  } catch (e) { $('msg').textContent = '불러오기 실패: ' + e.message; }
+}
+async function loadFromFiles() {
+  const m = $('fModel').files[0], w = $('fWeights').files[0], d = $('fMeta').files[0];
+  if (!m || !w || !d) { $('msg').textContent = '파일 3개를 모두 골라 주세요'; return; }
+  $('msg').textContent = '모델 불러오는 중…';
+  try { model = await tmPose.loadFromFiles(m, w, d); afterLoad(); }
+  catch (e) { $('msg').textContent = '불러오기 실패: ' + e.message; }
+}
+
+// ---------- 아두이노 ----------
+async function connectSerial() {
+  if (!('serial' in navigator)) { $('msg').textContent = '이 브라우저는 Web Serial을 지원하지 않습니다 (Chrome/Edge 사용)'; return; }
+  try {
+    const port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 9600 });
+    writer = port.writable.getWriter();
+    $('btnSerial').textContent = '아두이노 연결됨';
+  } catch (e) { $('msg').textContent = '아두이노 연결 실패: ' + e.message; }
+}
+function sendSerial(ch) { if (writer) writer.write(new TextEncoder().encode(ch)).catch(() => {}); }
+
+// ---------- 게임 진행 ----------
+function playable() { return labels.filter(n => mapping[n] && mapping[n] !== 'none'); }
+function startGame() {
+  if (playable().length === 0) { $('msg').textContent = '출제할 클래스가 없습니다. 클래스와 가이드를 연결해 주세요'; return; }
+  cfg = { rounds: Math.max(1, +$('rounds').value || 5), limit: Math.max(1, +$('limit').value || 5) * 1000, thr: Math.min(1, Math.max(0.5, +$('thr').value || 0.85)) };
+  round = 0; score = 0; log = []; target = null;
+  $('btnStart').disabled = true; $('btnLog').disabled = true;
+  nextRound();
+}
+function nextRound() {
+  round++;
+  const pool = playable().filter(n => n !== target || playable().length === 1);
+  target = pool[Math.floor(Math.random() * pool.length)];
+  phase = 'show'; phaseEnd = performance.now() + 2000;
+  $('big').className = ''; $('big').textContent = '';
+  $('target').textContent = GUIDE_NAMES[mapping[target]] + '!';
+  hud();
+}
+function beginPlay(now) {
+  phase = 'play'; playStart = now; phaseEnd = now + cfg.limit;
+  mlWin = []; baseWin = []; baseDoneAt = null; maxProb = 0;
+}
+function endRound(now, success) {
+  phase = 'result'; phaseEnd = now + 1500;
+  if (success) score++;
+  sendSerial(success ? 'S' : 'F');
+  $('big').className = success ? 'ok' : 'no';
+  $('big').textContent = success ? '성공!' : '실패';
+  log.push({ type: 'round', time: new Date().toISOString(), round, target, guide: mapping[target], result_ml: success ? 1 : 0,
+             time_to_ml_ms: success ? Math.round(now - playStart) : '', result_base: baseDoneAt !== null ? 1 : 0,
+             time_to_base_ms: baseDoneAt !== null ? Math.round(baseDoneAt - playStart) : '', max_target_prob: maxProb.toFixed(4), threshold: cfg.thr });
+  hud();
+}
+function endGame() {
+  phase = 'end';
+  $('big').className = ''; $('big').textContent = score + ' / ' + cfg.rounds + '점';
+  $('target').textContent = ''; $('probLabel').textContent = '';
+  $('probFill').style.width = '0'; $('timeFill').style.width = '0';
+  $('btnStart').disabled = false; $('btnStart').textContent = '다시 하기'; $('btnLog').disabled = false;
+}
+function hud() {
+  $('hudRound').textContent = cfg ? '라운드 ' + Math.min(round, cfg.rounds) + ' / ' + cfg.rounds : '';
+  $('hudScore').textContent = cfg ? '점수 ' + score : '';
+}
+
+async function loop() {
+  if (busy) { requestAnimationFrame(loop); return; }
+  busy = true;
+  wctx.save(); wctx.translate(W, 0); wctx.scale(-1, 1); wctx.drawImage(video, 0, 0, W, H); wctx.restore();
+
+  let pose = null, preds = null, latency = 0;
+  if (model) {
+    const t0 = performance.now();
+    try {
+      const out = await model.estimatePose(work);
+      pose = out.pose;
+      preds = await model.predict(out.posenetOutput);
+    } catch (e) { console.error(e); }
+    latency = performance.now() - t0;
+  }
+  const now = performance.now();
+
+  if (phase === 'show' && now >= phaseEnd) beginPlay(now);
+
+  if (phase === 'play') {
+    // 사람이 안 보이거나 예측이 없으면 실패 쪽으로 처리 (fail-safe)
+    const seen = !!(pose && pose.score > 0.3 && preds);
+    let top = { className: '', probability: 0 }, pTarget = 0, basePred = 'other';
+    if (seen) {
+      for (const p of preds) { if (p.probability > top.probability) top = p; if (p.className === target) pTarget = p.probability; }
+      basePred = baselinePredict(pose.keypoints);
+    }
+    const mlHit = seen && pTarget >= cfg.thr, baseHit = seen && basePred === mapping[target];
+    mlWin.push(mlHit); if (mlWin.length > WINDOW) mlWin.shift();
+    baseWin.push(baseHit); if (baseWin.length > WINDOW) baseWin.shift();
+    if (baseDoneAt === null && baseWin.filter(Boolean).length >= NEED) baseDoneAt = now;
+    maxProb = Math.max(maxProb, pTarget);
+    log.push({ type: 'frame', time: new Date().toISOString(), round, target, guide: mapping[target], ml_top: top.className, ml_top_prob: top.probability.toFixed(4),
+               ml_target_prob: pTarget.toFixed(4), ml_frame_hit: mlHit ? 1 : 0, base_pred: basePred, base_frame_hit: baseHit ? 1 : 0,
+               pose_score: pose ? pose.score.toFixed(4) : '', latency_ms: latency.toFixed(1), threshold: cfg.thr });
+    $('probFill').style.width = (pTarget * 100).toFixed(0) + '%';
+    $('probLabel').textContent = '목표 포즈 확률 ' + (pTarget * 100).toFixed(0) + '%';
+    $('timeFill').style.width = Math.max(0, (phaseEnd - now) / cfg.limit * 100).toFixed(1) + '%';
+    if (mlWin.filter(Boolean).length >= NEED) endRound(now, true);
+    else if (now >= phaseEnd) endRound(now, false);
+  } else if (phase === 'result' && now >= phaseEnd) {
+    if (round >= cfg.rounds) endGame(); else nextRound();
+  }
+
+  vctx.drawImage(work, 0, 0);
+  if (phase === 'show' || phase === 'play') drawGuide(mapping[target]);
+  if (phase === 'result') drawGuide(mapping[target], $('big').className === 'ok' ? 'rgba(61,220,132,0.8)' : 'rgba(255,107,94,0.8)');
+
+  busy = false;
+  requestAnimationFrame(loop);
+}
+
+function saveLog() {
+  const cols = ['type','time','round','target','guide','ml_top','ml_top_prob','ml_target_prob','ml_frame_hit','base_pred','base_frame_hit','pose_score','latency_ms',
+                'threshold','result_ml','time_to_ml_ms','result_base','time_to_base_ms','max_target_prob'];
+  const esc = v => { v = v === undefined ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+  const text = '﻿' + [cols.join(',')].concat(log.map(r => cols.map(c => esc(r[c])).join(','))).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' }));
+  a.download = 'loop_log_' + new Date().toISOString().replace(/[:.]/g, '-') + '.csv';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+$('btnLoad').onclick = loadFromUrl;
+$('btnLoadFiles').onclick = loadFromFiles;
+$('btnStart').onclick = startGame;
+$('btnSerial').onclick = connectSerial;
+$('btnLog').onclick = saveLog;
+
+(async function init() {
+  try { const u = localStorage.getItem('poseGameModelUrl'); if (u) $('modelUrl').value = u; } catch (e) {}
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: W, height: H }, audio: false });
+    video.srcObject = stream;
+    await video.play();
+    $('msg').textContent = '모델 주소를 넣고 불러오세요';
+  } catch (e) { $('msg').textContent = '카메라를 열 수 없습니다: ' + e.message; return; }
+  loop();
+})();
+</script>
+</body>
+</html>
